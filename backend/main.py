@@ -4,8 +4,10 @@ Indigenous GPU-Accelerated Optimization Solver
 SIH 2026 Problem Statement ID: 26119 | Organization: MRPL
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import json
@@ -59,6 +61,7 @@ class ModelPayload(BaseModel):
     parameters: Dict[str, Any] = Field(default_factory=dict)
 
 # Endpoints
+@app.get("/health")
 @app.get("/api/health")
 def health_check():
     return {
@@ -229,3 +232,33 @@ def get_benchmarks():
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+@app.post("/api/solve-direct")
+def solve_direct(payload: Dict[str, Any]):
+    engine = IndigenousMILPEngine(payload)
+    return engine.solve_mrpl_refinery()
+
+# Locate dist directory (supports both root deployment and backend/ sub-folder deployment)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+dist_dir = os.path.join(current_dir, "dist")
+if not os.path.exists(dist_dir):
+    dist_dir = os.path.join(os.path.dirname(current_dir), "dist")
+
+if os.path.exists(dist_dir):
+    assets_dir = os.path.join(dist_dir, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/")
+    def serve_index():
+        return FileResponse(os.path.join(dist_dir, "index.html"))
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        # Do not intercept API or documentation routes
+        if full_path.startswith("api/") or full_path in ["docs", "openapi.json", "health"]:
+            raise HTTPException(status_code=404, detail="Not Found")
+        file_path = os.path.join(dist_dir, full_path)
+        if full_path and os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(dist_dir, "index.html"))
